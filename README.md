@@ -1,6 +1,6 @@
 # About
 
-A demo app for a real-time task-by-task analysis of FSL algorithms. 
+A demo app for real-time task-by-task analysis of FSL algorithms. 
 
 ![GUI Screenshot](https://github.com/mattochal/demo_fsl_dev/blob/master/demo.gif?raw=true)
 
