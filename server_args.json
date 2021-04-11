@@ -3,7 +3,7 @@
     "seed"       : 0,
     "dataset"    : "mini",
     "version"    : null,
-    "data_path"  : "/media/disk2/mateusz/data/pkl/mini/",
+    "data_path"  : "/media/disk2/mateusz/data/pkl/",
     "exp_path"   : "/media/disk2/mateusz/repositories/imbalanced_fsl_dev/experiments/imbalanced_supports/mini/Conv4/",
     "models":[
         {

@@ -14,8 +14,9 @@ currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentfram
 parentdir = os.path.join(os.path.dirname(currentdir),'src')
 sys.path.insert(0,parentdir)
 
-from utils.utils import set_torch_seed, set_gpu, get_tasks, get_data, get_model, get_backbone, get_strategy, get_main_parser
-from utils.utils import compress_and_print, torch_summarize, extract_args_from_file, Bunch, get_raw_args, toDict
+from utils.utils import set_torch_seed, set_gpu, get_tasks, get_data, get_model, get_backbone, get_strategy, get_args, compress_args
+from utils.parser_utils import *
+from utils.bunch import bunch
 from utils.builder import ExperimentBuilder 
 from utils.ptracker import PerformanceTracker
 from utils.dataloader import DataLoader
@@ -47,16 +48,19 @@ def setup_algorithms(server_args):
         assert 'gpu' in builder_args, 'All "models" should have a specified "gpu" entry or "cpu" device.'
         
         stdin_list = [
+            "--args_file", os.path.join(abspath, builder_args["continue_from"], 'configs', 'config.json'),
             "--continue_from", os.path.join(abspath, builder_args["continue_from"]),
             "--gpu", builder_args['gpu'],
             "--seed", server_args.seed,
             "--dataset", server_args.dataset,
-            "--dataset_args", json.dumps({'test': {'dataset_version': server_args.version,
-                                                   'data_path': server_args.data_path}})
+            "--dataset_args", json.dumps({'dataset_version': server_args.version,
+                                                   'data_path': server_args.data_path})
         ]
         
-        builder_parser = get_main_parser()
-        builder_args = get_raw_args(builder_parser, stdin_list=stdin_list, args_dict={})
+        builder_args, excluded_args, parser = get_args(stdin_list)
+        builder_args = bunch.bunchify(builder_args)
+        
+        compressed_args = compress_args(bunch.unbunchify(builder_args), parser)
         
         device   = set_gpu(builder_args.gpu)
         tasks    = get_tasks(builder_args)
@@ -64,7 +68,14 @@ def setup_algorithms(server_args):
         backbone = get_backbone(builder_args, device)
         strategy = get_strategy(builder_args, device)
         model    = get_model(backbone, tasks, datasets, strategy, builder_args, device)
-        compress_and_print(builder_args)
+        
+        compressed_args = compress_args(bunch.unbunchify(builder_args), parser)
+        print(" ----------------- FULL ARGS (COMPACT) ----------------")
+        pprint.pprint(compressed_args, indent=2)
+        print(" ------------------------------------------------------")
+        print(" ------------------ UNRECOGNISED ARGS -----------------")
+        pprint.pprint(excluded_args, indent=2)
+        print(" ------------------------------------------------------")
         
         system = ExperimentBuilder(model, tasks, datasets, device, builder_args)
         system.load_pretrained()
@@ -194,7 +205,7 @@ class Server:
             'dataset': self.server_args.dataset,
             'version': self.server_args.version,
             'dataset_sig': self.datasets['test'].get_signature(),
-            'dataset_args': {setname:toDict(self.datasets[setname].args) for setname in ['train', 'test', 'val']}
+            'dataset_args': {setname:bunch.unbunchify(self.datasets[setname].args) for setname in ['train', 'test', 'val']}
         }
         return data
 
@@ -222,10 +233,10 @@ class Server:
                                                                            len(targets_idx)))
                 ptracker.set_mode('test')
                 builder.model.set_mode('test')
-                builder.task_args['test'] = Bunch(task_args['test'])
+                builder.task_args['test'] = bunch.bunchify(task_args['test'])
                 task_generator = TaskGenerator(builder.datasets['test'],
                                                task=DemoFSLTask,
-                                               task_args=Bunch(task_args['test']),
+                                               task_args= bunch.bunchify(task_args['test']),
                                                num_tasks=1,
                                                seed=builder.args.seed, 
                                                epoch=builder.state.epoch,
@@ -247,14 +258,11 @@ class Server:
             self.systems[model_name].model.net_reset()
 
 
-
-def get_server_parser(server_parser=argparse.ArgumentParser()):
-    server_parser = argparse.ArgumentParser(description="Incremental FSL Demo",prog='server')
-    server_parser.add_argument('--args_file', type=str, default='server_args.json', 
-                               help="Path and filename to json configuration file, over writing the values in the argparse")
+def get_server_parser(*args, **kwargs):
+    server_parser=argparse.ArgumentParser(*args, **kwargs)
     server_parser.add_argument('--models', type=list, default=[])
     server_parser.add_argument('--port', type=int, default=8991)
-    server_parser.add_argument('--dataset', type=str, default='ssss')
+    server_parser.add_argument('--dataset', type=str, default='mini')
     server_parser.add_argument('--version', type=str, default=None)
     server_parser.add_argument('--seed', type=int, default=0)
     server_parser.add_argument('--data_path', default='../data/')
@@ -262,19 +270,36 @@ def get_server_parser(server_parser=argparse.ArgumentParser()):
     return server_parser
 
 
-def get_server_args(args, to_ignore_from_file=["model", "task"], update_args={}, arg_list=None):
+def get_server_args(sysargv=None, json_args=None):
+    
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument('--args_file', type=str, default='server_args.json', 
+                               help="Path and filename to json configuration file, over writing the values in the argparse")
+    
+    base_parser = get_server_parser(description="FSL Demo (Server)", add_help=False, parents=[config_parser])
+    
+    # Step 1. Get config file
+    config_args, remaining_argv = config_parser.parse_known_args(sysargv)
+    config_args = vars(config_args)
+            
+    if json_args is None and config_args['args_file'] not in [None,'None','none','']:
+        json_args = load_json(config_args['args_file'])
+        json_args = from_syntactic_sugar(json_args)
+        json_args['args_file'] = config_args['args_file']
+    
+    elif json_args is None:
+        json_args = {}
+    
+    # Step 2. Update base args defaults using json
+    default_args = vars(base_parser.parse_args([]))
+    default_args, excluded_args = update_dict_exclusive(default_args, json_args)
+    base_parser.set_defaults(**default_args)
+    
+    # Step 3. Update base args using command line args
+    args, remaining_argv = base_parser.parse_known_args(remaining_argv)
     args_dict = vars(args)
-    args_dict.update(update_args)
-    
-    if args.args_file not in ["None", None, ""]: 
-        # The args passed with the command take priority over file args
-        to_ignore = [arg[2:] for arg in sys.argv if arg.startswith("--")]
-        to_ignore.extend(to_ignore_from_file)
-        print("To ignore from file", to_ignore)
-        args_dict.update(extract_args_from_file(args.args_file, to_ignore=to_ignore))
-    
     pprint.pprint(args_dict, indent=4)
-    args = Bunch(args_dict)
+    args = bunch.bunchify(args_dict)
     return args
 
 
@@ -287,6 +312,5 @@ def main(server_args):
     
     
 if __name__ == "__main__":
-    server_parser = get_server_parser()
-    server_args = get_server_args(server_parser.parse_args())
+    server_args = get_server_args(sys.argv)
     main(server_args)

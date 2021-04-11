@@ -36,8 +36,7 @@ currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentfram
 parentdir = os.path.join(os.path.dirname(currentdir),'src')
 sys.path.insert(0,parentdir)
 
-from utils.utils import get_main_parser, get_raw_args, extract_args_from_file
-from utils.utils import set_torch_seed, set_gpu, get_model, get_data, get_tasks
+from utils.utils import get_args, get_data
  
 BLANK_IMG = Image.new('RGB', (80, 80), (200,200,200)) 
 
@@ -347,12 +346,6 @@ class SupportSetButtonFrame(Frame):
                 classes.append(cls)
         
         print('classes', classes)
-        # classes = classes.union(list(set()))
-        # classes = classes.union(set(selected.keys()))
-        # classes = classes.union(set(potential.keys()))
-        # classes = list(classes)
-        # classes.sort()
-        # print(classes)
 
         self.image_button_mapping = []
 
@@ -961,8 +954,8 @@ class MainWindow(Frame):
         message['dataset_args']['val']['data_path'] = self.args.data_path
         message['dataset_args']['test']['data_path'] = self.args.data_path
 
-        parser = get_main_parser()
-        args = get_raw_args(parser, stdin_list=['--dataset_args', json.dumps(message['dataset_args'])], args_dict={'dataset':message['dataset']})
+        args, excluded_args, parser = get_args(stdin_list=['--dataset', message['dataset'], 
+                                               '--dataset_args', json.dumps(message['dataset_args'])])
 
         print(args)
         datasets = get_data(args)
